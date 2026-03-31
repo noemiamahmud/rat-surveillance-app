@@ -107,3 +107,20 @@ npm-debug.log*
 
 # Logs
 logs/
+
+######################
+# LARGE FILES        #
+######################
+
+# LLM model weights (GGUF, etc.)
+models/
+*.gguf
+
+# DLC project (model weights, labeled data, training images)
+dlc_project/
+
+# Uploaded videos/data
+backend/data/uploads/
+
+# PyTorch model snapshots
+*.pt
