@@ -1,0 +1,39 @@
+# Template for a stronger rat pose model retrain.
+# Copy the relevant sections into the active DLC project config before extracting
+# new labeled frames and retraining.
+
+bodyparts:
+  - nose
+  - left_ear
+  - right_ear
+  - neck
+  - shoulder
+  - upper_back
+  - spine_mid
+  - lower_back
+  - hip
+  - tail_base
+  - tail_mid
+  - tail_tip
+  - left_forepaw
+  - right_forepaw
+  - left_hindpaw
+  - right_hindpaw
+
+skeleton:
+  - [nose, left_ear]
+  - [nose, right_ear]
+  - [left_ear, right_ear]
+  - [nose, neck]
+  - [neck, shoulder]
+  - [shoulder, upper_back]
+  - [upper_back, spine_mid]
+  - [spine_mid, lower_back]
+  - [lower_back, hip]
+  - [hip, tail_base]
+  - [tail_base, tail_mid]
+  - [tail_mid, tail_tip]
+  - [shoulder, left_forepaw]
+  - [shoulder, right_forepaw]
+  - [hip, left_hindpaw]
+  - [hip, right_hindpaw]

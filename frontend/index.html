@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rat Behavior Classification</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Libre+Baskerville:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="main-card">
+        <div class="hero-image-placeholder">
+          <img src="rat.jpg" alt="Rat study image" class="hero-image" />
+        </div>
+
+        <div class="intro-block">
+          <p class="eyebrow">Behavior Classification in Preclinical Studies</p>
+          <h1>Rat Behavior Analysis</h1>
+          <p class="overview">
+            Behavioral classification helps researchers measure how drugs affect movement,
+            exploration, hesitation, and other patterns that may reflect changes in neural
+            or physiological state. Clean video-based categorization can make behavioral
+            effects easier to review, compare, and validate across studies.
+          </p>
+        </div>
+
+        <section class="upload-block">
+          <div class="upload-header">
+            <h2>Analyze a Video</h2>
+            <p>Drop in a rat video and review the annotated output directly in the browser.</p>
+          </div>
+
+          <form id="upload-form" class="upload-form">
+            <label class="upload-box" for="video-input">
+              <input id="video-input" name="file" type="file" accept="video/*" required />
+              <span class="upload-title">Upload rat study video</span>
+              <span id="selected-file-name" class="upload-file-name">No file selected</span>
+            </label>
+
+            <div class="controls-row">
+              <label>
+                <span>Condition</span>
+                <select id="condition-select" name="condition">
+                  <option value="">Unspecified</option>
+                  <option value="baseline">Baseline</option>
+                  <option value="saline">Saline</option>
+                  <option value="meth">Meth</option>
+                  <option value="amphetamine">Amphetamine</option>
+                  <option value="cocaine">Cocaine</option>
+                  <option value="alcohol">Alcohol</option>
+                  <option value="morphine">Morphine</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Classifier</span>
+                <select id="classifier-select" name="classifier_type">
+                  <option value="heuristic">Heuristic</option>
+                  <option value="pytorch_temporal">PyTorch Temporal</option>
+                  <option value="simba">SimBA</option>
+                </select>
+              </label>
+
+              <label class="checkbox-row">
+                <input id="live-feed-toggle" type="checkbox" checked />
+                <span>Live observer updates</span>
+              </label>
+
+              <button id="submit-button" type="submit" class="primary-button">
+                Run Analysis
+              </button>
+            </div>
+          </form>
+          <div class="status-block">
+            <p id="status" class="status">Waiting for a video.</p>
+            <p id="pipeline-badge" class="pipeline-status"></p>
+          </div>
+        </section>
+
+        <section id="results" class="results hidden">
+          <section class="media-card annotated-primary">
+            <div class="media-header">
+              <div>
+                <h3>Annotated Output</h3>
+                <p>The browser-ready analysis video should play here after each run.</p>
+              </div>
+              <a id="open-annotated" class="media-link" href="#" target="_blank" rel="noreferrer">Open file</a>
+            </div>
+            <video id="annotated-video" controls playsinline preload="metadata"></video>
+            <p id="annotated-video-status" class="video-status"></p>
+          </section>
+
+          <section class="summary-block">
+            <div class="section-top">
+              <h3>Run Summary</h3>
+            </div>
+            <p id="analysis-summary" class="analysis-summary"></p>
+            <div id="summary-grid" class="summary-grid"></div>
+            <div id="behavior-share" class="chips"></div>
+            <div id="model-stack" class="chips model-stack"></div>
+            <ul id="notes" class="notes"></ul>
+
+            <div class="links-row">
+              <a id="download-annotated" class="action-link" href="#" download>Download Annotated Video</a>
+              <a id="download-timeline" class="action-link secondary" href="#" target="_blank" rel="noreferrer">
+                Open Timeline JSON
+              </a>
+            </div>
+          </section>
+
+          <section class="observer-block">
+            <div class="section-top">
+              <h3>Observer Notes</h3>
+            </div>
+            <div id="analyst-chat" class="feed">
+              <p class="status">AI observer is waiting for the first event.</p>
+            </div>
+          </section>
+
+          <section class="timeline-block">
+            <div class="section-top">
+              <h3>Detected Bouts</h3>
+            </div>
+            <div id="timeline" class="feed"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,92 @@
+    # Project definitions (do not edit)
+Task: RatTracking
+scorer: Noemia
+date: Nov17
+multianimalproject: false
+identity:
+
+    # Project path (change when moving around)
+project_path: 
+  /Users/noemiamahmud/rat-surveillance-app/dlc_project/RatTracking-Noemia-2025-11-17
+
+    # Annotation data set configuration (and individual video cropping parameters)
+video_sets:
+  /Users/noemiamahmud/rat-surveillance-app/dlc_project/RatTracking-Noemia-2025-11-17/videos/rat_video_3.mp4:
+    crop: 0, 1920, 0, 1080
+bodyparts:
+- nose
+- left_ear
+- right_ear
+- neck
+- shoulder
+- upper_back
+- spine_mid
+- lower_back
+- hip
+- tail_base
+- tail_mid
+- tail_tip
+- left_forepaw
+- right_forepaw
+- left_hindpaw
+- right_hindpaw
+
+
+
+# Fraction of video to start/stop when extracting frames for labeling/refinement
+
+    # Fraction of video to start/stop when extracting frames for labeling/refinement
+start: 0
+stop: 1
+numframes2pick: 400
+
+    # Plotting configuration
+skeleton:
+- [nose, left_ear]
+- [nose, right_ear]
+- [left_ear, right_ear]
+- [nose, neck]
+- [neck, shoulder]
+- [shoulder, upper_back]
+- [upper_back, spine_mid]
+- [spine_mid, lower_back]
+- [lower_back, hip]
+- [hip, tail_base]
+- [tail_base, tail_mid]
+- [tail_mid, tail_tip]
+- [shoulder, left_forepaw]
+- [shoulder, right_forepaw]
+- [hip, left_hindpaw]
+- [hip, right_hindpaw]
+skeleton_color: black
+pcutoff: 0.6
+dotsize: 12
+alphavalue: 0.7
+colormap: rainbow
+
+    # Training,Evaluation and Analysis configuration
+TrainingFraction:
+- 0.95
+iteration: 0
+default_net_type: resnet_50
+default_augmenter: default
+snapshotindex: -1
+batch_size: 8
+
+    # Cropping Parameters (for analysis and outlier frame detection)
+cropping: false
+    #if cropping is true for analysis, then set the values here:
+x1: 0
+x2: 640
+y1: 277
+y2: 624
+
+    # Refinement configuration (parameters from annotation dataset configuration also relevant in this stage)
+corner2move2:
+- 50
+- 50
+move2corner: true
+engine: pytorch
+detector_snapshotindex: -1
+detector_batch_size: 1
+SuperAnimalConversionTables:
