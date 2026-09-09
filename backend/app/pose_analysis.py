@@ -443,3 +443,91 @@ def summarize_pose_analysis(
 def analyze_dlc_csv(csv_path: str, fps: float | None = None) -> dict:
     df = load_dlc_csv(csv_path)
     return summarize_pose_analysis(df, fps=fps)
+
+
+def extract_pose_features_per_frame(
+    df: pd.DataFrame,
+    fps: float,
+    n_frames: int | None = None,
+) -> np.ndarray:
+    """
+    Per-frame pose features aligned with temporal_classifier indices 13-21.
+
+    Columns: body_curvature, turning_rate, body_length, forepaw_span, hindpaw_span,
+    ear_span, tail_extension, grooming_local_motion, nose_tail_angle.
+    """
+    flattened = flatten_dlc_columns(df)
+    bodyparts = infer_bodyparts(flattened.columns)
+    n = n_frames or len(flattened)
+    out = np.zeros((n, 9), dtype=np.float32)
+    if not bodyparts or len(flattened) == 0:
+        return out
+
+    dt = 1.0 / fps if fps and fps > 0 else 1.0
+    use_n = min(n, len(flattened))
+
+    try:
+        if {"nose", "tail_base"}.issubset(bodyparts):
+            nose_x, nose_y = _bodypart_xy(flattened, "nose")
+            tail_x, tail_y = _bodypart_xy(flattened, "tail_base")
+            body_length = np.sqrt((nose_x - tail_x) ** 2 + (nose_y - tail_y) ** 2)
+            axis_angle = _vector_angle_degrees(nose_x - tail_x, nose_y - tail_y)
+            nose_tail_angle = axis_angle
+        else:
+            centroid, _ = compute_centroid_track(flattened)
+            dx = centroid["x_smooth"].diff().fillna(0.0)
+            dy = centroid["y_smooth"].diff().fillna(0.0)
+            body_length = pd.Series(np.nan, index=flattened.index, dtype=float)
+            axis_angle = _vector_angle_degrees(dx, dy)
+            nose_tail_angle = axis_angle
+    except ValueError:
+        return out
+
+    turning_rate = _angle_change_degrees(axis_angle) / max(dt, 1e-6)
+    forepaw_span = _pair_distance(flattened, "left_forepaw", "right_forepaw")
+    hindpaw_span = _pair_distance(flattened, "left_hindpaw", "right_hindpaw")
+    ear_span = _pair_distance(flattened, "left_ear", "right_ear")
+    tail_extension = _pair_distance(flattened, "tail_base", "tail_tip")
+    grooming_local_motion = (
+        forepaw_span.diff().abs().fillna(0.0)
+        + hindpaw_span.diff().abs().fillna(0.0)
+        + ear_span.diff().abs().fillna(0.0)
+    ) / max(dt, 1e-6)
+
+    curvature_components: list[pd.Series] = []
+    for start, mid, end in (
+        ("nose", "upper_back", "lower_back"),
+        ("upper_back", "lower_back", "tail_base"),
+        ("lower_back", "tail_base", "tail_tip"),
+    ):
+        if {start, mid, end}.issubset(bodyparts):
+            sx, sy = _bodypart_xy(flattened, start)
+            mx, my = _bodypart_xy(flattened, mid)
+            ex, ey = _bodypart_xy(flattened, end)
+            angle_a = np.arctan2(my - sy, mx - sx)
+            angle_b = np.arctan2(ey - my, ex - mx)
+            component = pd.Series(
+                np.abs(np.degrees(np.unwrap((angle_b - angle_a).to_numpy()))),
+                index=flattened.index,
+            )
+            curvature_components.append(component)
+    body_curvature = (
+        pd.concat(curvature_components, axis=1).mean(axis=1)
+        if curvature_components
+        else pd.Series(0.0, index=flattened.index)
+    ).fillna(0.0)
+
+    columns = [
+        body_curvature.fillna(0.0),
+        turning_rate.fillna(0.0),
+        body_length.fillna(0.0),
+        forepaw_span.fillna(0.0),
+        hindpaw_span.fillna(0.0),
+        ear_span.fillna(0.0),
+        tail_extension.fillna(0.0),
+        grooming_local_motion.fillna(0.0),
+        nose_tail_angle.fillna(0.0),
+    ]
+    stacked = np.column_stack([series.to_numpy(dtype=np.float32)[:use_n] for series in columns])
+    out[:use_n] = np.nan_to_num(stacked, nan=0.0, posinf=0.0, neginf=0.0)
+    return out

@@ -228,7 +228,7 @@ async def upload_video_for_analysis_stream(
 
 @router.post("/analysis/simba-classify", response_model=SimBAAnalysisResponse)
 def simba_classify(payload: SimBAAnalysisRequest):
-    classifier = get_simba_classifier()
+    classifier = get_simba_classifier(classifier_type="simba")
     if classifier is None:
         raise HTTPException(
             status_code=503,

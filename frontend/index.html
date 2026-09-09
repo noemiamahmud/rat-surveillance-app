@@ -33,7 +33,7 @@
         <section class="upload-block">
           <div class="upload-header">
             <h2>Analyze a Video</h2>
-            <p>Drop in a rat video and review the annotated output directly in the browser.</p>
+            <p>Drop in a rat video. The default classifier runs on-device with no GPU checkpoint.</p>
           </div>
 
           <form id="upload-form" class="upload-form">
@@ -61,7 +61,7 @@
               <label>
                 <span>Classifier</span>
                 <select id="classifier-select" name="classifier_type">
-                  <option value="heuristic">Heuristic</option>
+                  <option value="adaptive_hmm" selected>Adaptive HMM (on-device)</option>
                   <option value="pytorch_temporal">PyTorch Temporal</option>
                   <option value="simba">SimBA</option>
                 </select>
@@ -102,6 +102,7 @@
             </div>
             <p id="analysis-summary" class="analysis-summary"></p>
             <div id="summary-grid" class="summary-grid"></div>
+            <div id="condition-anomalies" class="chips"></div>
             <div id="behavior-share" class="chips"></div>
             <div id="model-stack" class="chips model-stack"></div>
             <ul id="notes" class="notes"></ul>
