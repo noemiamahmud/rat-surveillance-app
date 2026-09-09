@@ -14,9 +14,9 @@ import numpy as np
 
 from .config import settings
 from .observer_llm import llm_available, llm_descriptor, summarize_with_llm
+from .adaptive_classifier import classify_feature_sequence
 from .temporal_classifier import (
     get_classifier,
-    heuristic_classify,
     extract_features_from_motion,
     enrich_with_pose,
 )
@@ -213,7 +213,10 @@ def _selected_models(pose_enrichment: dict | None, classifier_mode: str = "heuri
     elif classifier_mode == "simba":
         temporal_desc = "SimBA LSTM behavioral classifier (pose-sequence supervised learning)"
     else:
-        temporal_desc = "Heuristic rule-based classifier (motion thresholds, fallback mode)"
+        temporal_desc = (
+            "Adaptive HMM classifier (session-normalized motion, condition priors, "
+            "Viterbi temporal decoding; runs on CPU without a trained checkpoint)"
+        )
 
     return {
         "pose_model": (
@@ -348,13 +351,13 @@ def _run_behavior_analysis(
         fps = 20.0
     pose_runtime_available, initial_pipeline_mode, pose_runtime_message = _pose_runtime_status()
 
-    requested_classifier = (classifier_type or settings.CLASSIFIER_TYPE or "heuristic").strip().lower()
-    if requested_classifier not in {"heuristic", "pytorch_temporal", "simba"}:
-        requested_classifier = "heuristic"
+    requested_classifier = (classifier_type or settings.CLASSIFIER_TYPE or "adaptive_hmm").strip().lower()
+    if requested_classifier not in {"heuristic", "adaptive_hmm", "pytorch_temporal", "simba"}:
+        requested_classifier = "adaptive_hmm"
 
     nn_classifier = get_classifier(requested_classifier)
-    simba_classifier = get_simba_classifier() if requested_classifier == "simba" else None
-    classifier_mode = "heuristic"
+    simba_classifier = get_simba_classifier(classifier_type=requested_classifier) if requested_classifier == "simba" else None
+    classifier_mode = "adaptive_hmm"
     classifier_note = None
     if requested_classifier == "pytorch_temporal":
         if nn_classifier is not None:
@@ -393,7 +396,7 @@ def _run_behavior_analysis(
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
 
-    raw_frames: list[np.ndarray] = []
+    raw_frame_count = 0
     frame_states: list[FrameState] = []
     centroids: list[tuple[float | None, float | None]] = []
     prev_gray = None
@@ -410,14 +413,14 @@ def _run_behavior_analysis(
     window_frames = max(5, int(fps * WINDOW_SECONDS))
     last_stream_label = "monitoring"
 
-    # --- Phase 1: Extract motion features from all frames ---
+    # --- Phase 1: Extract motion features without holding decoded frames in RAM ---
     while True:
         ok, frame = capture.read()
         if not ok:
             break
 
-        timestamp_s = len(raw_frames) / fps
-        raw_frames.append(frame)
+        timestamp_s = raw_frame_count / fps
+        raw_frame_count += 1
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (7, 7), 0)
@@ -494,18 +497,18 @@ def _run_behavior_analysis(
         pace_confined_score = recent_avg_speed / max(spatial_span, 1.0)
         pace_confined_scores.append(pace_confined_score)
 
-        if stream_callback and len(raw_frames) % max(5, int(fps // 2) or 1) == 0:
+        if stream_callback and raw_frame_count % max(5, int(fps // 2) or 1) == 0:
             stream_callback(
                 {
                     "type": "progress",
                     "timestamp_s": float(timestamp_s),
-                    "processed_frames": len(raw_frames),
+                    "processed_frames": raw_frame_count,
                 }
             )
 
     capture.release()
 
-    if not raw_frames:
+    if raw_frame_count == 0:
         raise RuntimeError("The uploaded video did not contain readable frames.")
 
     # --- Phase 2: Pose enrichment ---
@@ -514,7 +517,45 @@ def _run_behavior_analysis(
     if pose_runtime_available:
         pose_enrichment, pose_enrichment_error = _maybe_pose_enrichment(input_path, fps)
 
-    # --- Phase 3: Classify behavior (NN or heuristic) ---
+    # --- Phase 3: Classify behavior (NN, SimBA, or adaptive HMM) ---
+    def _append_states(labels: list[str], confidences: list[float]) -> None:
+        nonlocal last_stream_label
+        for i, (label, confidence) in enumerate(zip(labels, confidences)):
+            if i >= raw_frame_count:
+                break
+            timestamp_s = i / fps
+            frame_states.append(
+                FrameState(
+                    timestamp_s=float(timestamp_s),
+                    label=label,
+                    confidence=float(confidence),
+                    speed=float(recent_speeds[i]),
+                    motion_score=float(motion_scores[i]),
+                    x=centroids_x[i],
+                    y=centroids_y[i],
+                    bbox_area_ratio=float(bbox_area_ratios[i]),
+                    direction_delta=float(direction_deltas[i]),
+                    spatial_span=float(spatial_spans[i]),
+                    pace_confined_score=float(pace_confined_scores[i]),
+                )
+            )
+            if (
+                stream_callback
+                and label != "monitoring"
+                and label != last_stream_label
+                and confidence >= 0.55
+            ):
+                stream_callback(
+                    {
+                        "type": "event",
+                        "timestamp_s": float(timestamp_s),
+                        "label": label,
+                        "confidence": float(confidence),
+                        "message": _note_for_label(label),
+                    }
+                )
+                last_stream_label = label
+
     if classifier_mode == "simba":
         pose_df = pose_enrichment.get("pose_df") if pose_enrichment is not None else None
         if pose_df is None:
@@ -522,46 +563,15 @@ def _run_behavior_analysis(
                 "SimBA classification requires DeepLabCut pose output, but pose enrichment was unavailable. "
                 "Falling back to heuristic classification."
             )
-            classifier_mode = "heuristic"
+            classifier_mode = "adaptive_hmm"
         else:
             classifications = simba_classifier.predict_from_dataframe(pose_df, fps=fps)
-            for cls in classifications:
-                i = int(cls["frame"])
-                timestamp_s = i / fps
-                frame_states.append(
-                    FrameState(
-                        timestamp_s=float(timestamp_s),
-                        label=cls["label"],
-                        confidence=float(cls["confidence"]),
-                        speed=float(recent_speeds[i]),
-                        motion_score=float(motion_scores[i]),
-                        x=centroids_x[i],
-                        y=centroids_y[i],
-                        bbox_area_ratio=float(bbox_area_ratios[i]),
-                        direction_delta=float(direction_deltas[i]),
-                        spatial_span=float(spatial_spans[i]),
-                        pace_confined_score=float(pace_confined_scores[i]),
-                    )
-                )
-                if (
-                    stream_callback
-                    and cls["label"] != "monitoring"
-                    and cls["label"] != last_stream_label
-                    and cls["confidence"] >= 0.55
-                ):
-                    stream_callback(
-                        {
-                            "type": "event",
-                            "timestamp_s": float(timestamp_s),
-                            "label": cls["label"],
-                            "confidence": float(cls["confidence"]),
-                            "message": _note_for_label(cls["label"]),
-                        }
-                    )
-                    last_stream_label = cls["label"]
+            _append_states(
+                [cls["label"] for cls in classifications],
+                [float(cls["confidence"]) for cls in classifications],
+            )
 
     if classifier_mode == "pytorch_temporal":
-        # Build feature matrix and classify with trained model
         feature_matrix = extract_features_from_motion(
             speeds=recent_speeds,
             motion_scores=motion_scores,
@@ -578,108 +588,51 @@ def _run_behavior_analysis(
         )
         feature_matrix = enrich_with_pose(feature_matrix, pose_enrichment, fps)
         classifications = nn_classifier.predict(feature_matrix)
+        _append_states(
+            [cls.label for cls in classifications],
+            [float(cls.confidence) for cls in classifications],
+        )
 
-        for i, cls in enumerate(classifications):
-            timestamp_s = i / fps
-            frame_states.append(
-                FrameState(
-                    timestamp_s=float(timestamp_s),
-                    label=cls.label,
-                    confidence=float(cls.confidence),
-                    speed=float(recent_speeds[i]),
-                    motion_score=float(motion_scores[i]),
-                    x=centroids_x[i],
-                    y=centroids_y[i],
-                    bbox_area_ratio=float(bbox_area_ratios[i]),
-                    direction_delta=float(direction_deltas[i]),
-                    spatial_span=float(spatial_spans[i]),
-                    pace_confined_score=float(pace_confined_scores[i]),
-                )
-            )
-            if stream_callback and cls.label != "monitoring" and cls.label != last_stream_label and cls.confidence >= 0.55:
-                stream_callback(
-                    {
-                        "type": "event",
-                        "timestamp_s": float(timestamp_s),
-                        "label": cls.label,
-                        "confidence": float(cls.confidence),
-                        "message": _note_for_label(cls.label),
-                    }
-                )
-                last_stream_label = cls.label
-    if classifier_mode == "heuristic":
-        # Heuristic fallback (frame-by-frame)
-        for i in range(len(raw_frames)):
-            timestamp_s = i / fps
-            recent_direction = [
-                state.direction_delta
-                for state in frame_states[-window_frames:]
-                if state.direction_delta > 0
-            ]
-            recent_avg_speed = float(np.mean(recent_speeds[max(0, i - window_frames):i + 1]))
-
-            label, confidence = heuristic_classify(
-                speed=recent_speeds[i],
-                motion_score=motion_scores[i],
-                direction_delta=direction_deltas[i],
-                spatial_span=spatial_spans[i],
-                pace_confined_score=pace_confined_scores[i],
-                recent_avg_speed=recent_avg_speed,
-                recent_direction_mean=float(np.mean(recent_direction or [0])),
-                width=width,
-            )
-
-            frame_states.append(
-                FrameState(
-                    timestamp_s=float(timestamp_s),
-                    label=label,
-                    confidence=float(confidence),
-                    speed=float(recent_speeds[i]),
-                    motion_score=float(motion_scores[i]),
-                    x=centroids_x[i],
-                    y=centroids_y[i],
-                    bbox_area_ratio=float(bbox_area_ratios[i]),
-                    direction_delta=float(direction_deltas[i]),
-                    spatial_span=float(spatial_spans[i]),
-                    pace_confined_score=float(pace_confined_scores[i]),
-                )
-            )
-            if stream_callback and label != "monitoring" and label != last_stream_label and confidence >= 0.55:
-                stream_callback(
-                    {
-                        "type": "event",
-                        "timestamp_s": float(timestamp_s),
-                        "label": label,
-                        "confidence": float(confidence),
-                        "message": _note_for_label(label),
-                    }
-                )
-                last_stream_label = label
+    if classifier_mode in {"heuristic", "adaptive_hmm"}:
+        classifier_mode = "adaptive_hmm"
+        feature_matrix = extract_features_from_motion(
+            speeds=recent_speeds,
+            motion_scores=motion_scores,
+            direction_deltas=direction_deltas,
+            spatial_spans=spatial_spans,
+            bbox_area_ratios=bbox_area_ratios,
+            pace_confined_scores=pace_confined_scores,
+            centroids_x=centroids_x,
+            centroids_y=centroids_y,
+            frame_width=width,
+            frame_height=height,
+            fps=fps,
+            window_frames=window_frames,
+        )
+        feature_matrix = enrich_with_pose(feature_matrix, pose_enrichment, fps)
+        sequence = classify_feature_sequence(
+            feature_matrix,
+            frame_width=width,
+            frame_height=height,
+            fps=fps,
+            condition=condition,
+        )
+        _append_states(sequence.labels, sequence.confidences)
 
     pipeline_mode = "hybrid_pose_motion" if pose_enrichment is not None else "motion_fallback"
-    if nn_classifier is not None:
+    if classifier_mode == "pytorch_temporal":
         pipeline_mode = f"nn_{pipeline_mode}"
     elif classifier_mode == "simba":
         pipeline_mode = f"simba_{pipeline_mode}"
+    elif classifier_mode == "adaptive_hmm":
+        pipeline_mode = f"hmm_{pipeline_mode}"
     pose_summary = pose_enrichment["summary"] if pose_enrichment is not None else None
 
     label_counts = Counter(state.label for state in frame_states if state.label != "monitoring")
     dominant_behavior = label_counts.most_common(1)[0][0] if label_counts else "monitoring"
     bouts = _segment_bouts(frame_states)
 
-    if pose_summary is not None:
-        if pose_summary["metrics"]["stereotypy_candidate_ratio"] > 0.1:
-            dominant_behavior = "stereotypy_candidate"
-        elif pose_summary["metrics"]["grooming_candidate_ratio"] > 0.08:
-            dominant_behavior = "grooming_candidate"
-        elif pose_summary["metrics"]["freezing_candidate_ratio"] > 0.2:
-            dominant_behavior = "freezing_candidate"
-        elif pose_summary["metrics"]["exploratory_ratio"] > 0.3:
-            dominant_behavior = "exploration"
-        elif pose_summary["metrics"]["immobility_ratio"] > 0.45:
-            dominant_behavior = "resting"
-
-    low_confidence_ratio = float(np.mean([state.confidence < 0.55 for state in frame_states]))
+    low_confidence_ratio = float(np.mean([state.confidence < 0.55 for state in frame_states])) if frame_states else 1.0
     base_priority = (
         "High" if low_confidence_ratio > 0.35 or dominant_behavior == "stereotypy_candidate"
         else "Medium" if low_confidence_ratio > 0.15
@@ -723,10 +676,21 @@ def _run_behavior_analysis(
         fps,
         (width, height),
     )
-    for frame_index, (frame, state) in enumerate(zip(raw_frames, frame_states)):
-        annotated_frame = _draw_overlay(frame, state, dominant_behavior)
-        annotated_frame = _draw_pose_overlay(annotated_frame, pose_enrichment, frame_index)
-        writer.write(annotated_frame)
+    replay = cv2.VideoCapture(str(input_path))
+    frame_index = 0
+    while True:
+        ok, frame = replay.read()
+        if not ok:
+            break
+        state = frame_states[frame_index] if frame_index < len(frame_states) else None
+        if state is None:
+            writer.write(frame)
+        else:
+            annotated_frame = _draw_overlay(frame, state, dominant_behavior)
+            annotated_frame = _draw_pose_overlay(annotated_frame, pose_enrichment, frame_index)
+            writer.write(annotated_frame)
+        frame_index += 1
+    replay.release()
     writer.release()
 
     annotated_path = artifact_dir / "annotated.mp4"
@@ -782,8 +746,9 @@ def _run_behavior_analysis(
         "condition_report": condition_report,
         "condition_anomalies": condition_anomalies,
         "notes": [
-            "Neural network-based rat behavior classifier for drug experiment analysis.",
+            "Adaptive HMM rat behavior classifier for drug-experiment screening on CPU.",
             f"Classifier mode: {classifier_mode}. Pipeline mode: {pipeline_mode}.",
+            "Motion is normalized to this video's resolution and session percentiles, then decoded with Viterbi.",
             "When available, DeepLabCut pose outputs enrich the feature set for stronger classification.",
         ],
     }

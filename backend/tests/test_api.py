@@ -105,8 +105,13 @@ def test_upload_video_analysis_endpoint(tmp_path):
     assert payload["source_video_url"].startswith("/uploads/")
     assert "analysis_summary" in payload
     assert payload["review_priority"] in {"Low", "Medium", "High"}
-    assert payload["pipeline_mode"] in {"motion_fallback", "hybrid_pose_motion"}
-    assert payload["classifier_mode"] == "heuristic"
+    assert payload["pipeline_mode"] in {
+        "motion_fallback",
+        "hybrid_pose_motion",
+        "hmm_motion_fallback",
+        "hmm_hybrid_pose_motion",
+    }
+    assert payload["classifier_mode"] == "adaptive_hmm"
     assert payload["condition"] == "baseline"
     assert payload["condition_report"]["condition"] == "Baseline"
     assert isinstance(payload["condition_anomalies"], list)

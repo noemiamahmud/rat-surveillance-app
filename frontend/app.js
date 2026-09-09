@@ -10,7 +10,7 @@ const submitButton = document.getElementById("submit-button");
 const annotatedVideo = document.getElementById("annotated-video");
 const analysisSummary = document.getElementById("analysis-summary");
 const summaryGrid = document.getElementById("summary-grid");
-const behaviorShare = document.getElementById("behavior-share");
+const conditionAnomalies = document.getElementById("condition-anomalies");
 const modelStack = document.getElementById("model-stack");
 const timeline = document.getElementById("timeline");
 const analystChat = document.getElementById("analyst-chat");
@@ -63,7 +63,7 @@ async function submitVideo(fileLike) {
   const formData = new FormData();
   formData.append("file", fileLike);
   formData.append("condition", conditionSelect?.value || "");
-  formData.append("classifier_type", classifierSelect?.value || "heuristic");
+  formData.append("classifier_type", classifierSelect?.value || "adaptive_hmm");
 
   const response = await fetch("/api/analysis/upload-video", {
     method: "POST",
@@ -81,7 +81,7 @@ async function submitVideoStream(fileLike) {
   const formData = new FormData();
   formData.append("file", fileLike);
   formData.append("condition", conditionSelect?.value || "");
-  formData.append("classifier_type", classifierSelect?.value || "heuristic");
+  formData.append("classifier_type", classifierSelect?.value || "adaptive_hmm");
 
   const response = await fetch("/api/analysis/upload-video-stream", {
     method: "POST",
@@ -210,6 +210,23 @@ function renderResults(payload) {
       `
     )
     .join("");
+
+  if (conditionAnomalies) {
+    const anomalies = payload.condition_anomalies || [];
+    conditionAnomalies.innerHTML = anomalies.length
+      ? anomalies
+          .map(
+            (anomaly) => `
+              <span class="chip ${anomaly.severity === "high" ? "stereotypy_candidate" : "hesitation"}">
+                ${anomaly.behavior}: ${anomaly.direction.replaceAll("_", " ")} (${formatPercent(anomaly.observed)})
+              </span>
+            `
+          )
+          .join("")
+      : payload.condition
+        ? `<span class="chip exploration">No condition anomalies vs ${payload.condition} norms</span>`
+        : "";
+  }
 
   behaviorShare.innerHTML = Object.entries(payload.behavior_share)
     .map(

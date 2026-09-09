@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-5.2-chat-latest"
     LLAMA_CPP_MODEL: str = "local-llama.cpp"
-    CLASSIFIER_TYPE: str = "heuristic"
+    CLASSIFIER_TYPE: str = "adaptive_hmm"
     CLASSIFIER_MODEL_PATH: str = ""
     CLASSIFIER_MODEL_TYPE: str = "lstm"
     SIMBA_MODEL_PATH: str = ""

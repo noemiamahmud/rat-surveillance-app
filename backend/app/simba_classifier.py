@@ -397,9 +397,10 @@ class SimBABehaviorClassifier:
 
 def get_simba_classifier(
     model_path: str | None = None,
+    classifier_type: str | None = None,
 ) -> SimBABehaviorClassifier | None:
-    """Load SimBA classifier if configured."""
-    ctype = getattr(settings, "CLASSIFIER_TYPE", "heuristic").strip().lower()
+    """Load SimBA classifier if a trained checkpoint is configured."""
+    ctype = (classifier_type or getattr(settings, "CLASSIFIER_TYPE", "heuristic")).strip().lower()
     if ctype != "simba":
         return None
 

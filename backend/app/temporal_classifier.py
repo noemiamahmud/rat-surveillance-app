@@ -189,6 +189,8 @@ def extract_features_from_motion(
     """Convert raw motion features to the standardized feature matrix (N, NUM_FEATURES)."""
     n = len(speeds)
     features = np.zeros((n, NUM_FEATURES), dtype=np.float32)
+    if n == 0:
+        return features
 
     speeds_arr = np.array(speeds, dtype=np.float32)
     motion_arr = np.array(motion_scores, dtype=np.float32)
@@ -214,16 +216,30 @@ def extract_features_from_motion(
     features[:, 7] = cx / max(frame_width, 1)
     features[:, 8] = cy / max(frame_height, 1)
 
-    # Rolling statistics
-    for i in range(n):
-        start = max(0, i - window_frames)
-        window_speeds = speeds_arr[start:i + 1]
-        window_dirs = direction_arr[start:i + 1]
-        features[i, 9] = np.mean(window_speeds)
-        features[i, 10] = np.std(window_speeds)
-        features[i, 11] = np.mean(window_dirs)
-        window_spans = span_arr[start:i + 1]
-        features[i, 12] = np.mean(window_spans)
+    window = max(1, int(window_frames))
+    c_speed = np.cumsum(speeds_arr, dtype=np.float64)
+    c_speed_sq = np.cumsum(speeds_arr.astype(np.float64) ** 2)
+    c_dir = np.cumsum(direction_arr, dtype=np.float64)
+    c_span = np.cumsum(span_arr, dtype=np.float64)
+    counts = np.arange(1, n + 1, dtype=np.float64)
+    start_idx = np.maximum(0, np.arange(n) - window)
+    span_counts = counts - start_idx
+    prev_c_speed = np.concatenate([[0.0], c_speed[:-1]])
+    prev_c_speed_sq = np.concatenate([[0.0], c_speed_sq[:-1]])
+    prev_c_dir = np.concatenate([[0.0], c_dir[:-1]])
+    prev_c_span = np.concatenate([[0.0], c_span[:-1]])
+    start_c_speed = np.where(start_idx > 0, prev_c_speed[start_idx], 0.0)
+    start_c_speed_sq = np.where(start_idx > 0, prev_c_speed_sq[start_idx], 0.0)
+    start_c_dir = np.where(start_idx > 0, prev_c_dir[start_idx], 0.0)
+    start_c_span = np.where(start_idx > 0, prev_c_span[start_idx], 0.0)
+    # Inclusive window [start_idx, i]
+    sum_speed = c_speed - start_c_speed
+    sum_speed_sq = c_speed_sq - start_c_speed_sq
+    features[:, 9] = (sum_speed / span_counts).astype(np.float32)
+    var = np.maximum(sum_speed_sq / span_counts - features[:, 9] ** 2, 0.0)
+    features[:, 10] = np.sqrt(var).astype(np.float32)
+    features[:, 11] = ((c_dir - start_c_dir) / span_counts).astype(np.float32)
+    features[:, 12] = ((c_span - start_c_span) / span_counts).astype(np.float32)
 
     # Pose features default to 0 (filled by enrich_with_pose if available)
     return features
@@ -234,46 +250,42 @@ def enrich_with_pose(
     pose_enrichment: dict | None,
     fps: float,
 ) -> np.ndarray:
-    """Add pose-derived features to the feature matrix if DLC data is available."""
+    """Add per-frame pose features when DLC output is available; otherwise leave zeros."""
     if pose_enrichment is None:
+        return features
+
+    pose_df = pose_enrichment.get("pose_df")
+    if pose_df is not None:
+        from .pose_analysis import extract_pose_features_per_frame
+
+        pose_mat = extract_pose_features_per_frame(pose_df, fps=fps, n_frames=len(features))
+        features[:, 13:22] = pose_mat
         return features
 
     summary = pose_enrichment.get("summary", {})
     metrics = summary.get("metrics", {})
-
-    # For now, fill aggregate pose metrics into all frames as context
-    # Per-frame pose features would require the full pose DataFrame
     features[:, 13] = metrics.get("mean_body_curvature_deg", 0.0)
     features[:, 14] = metrics.get("mean_turning_rate_deg_s", 0.0)
     features[:, 15] = metrics.get("mean_body_length_px", 0.0)
     features[:, 19] = metrics.get("mean_tail_extension_px", 0.0)
     features[:, 20] = metrics.get("grooming_motion_score", 0.0)
 
-    # Per-frame keypoint features if available
     frame_keypoints = pose_enrichment.get("frame_keypoints", {})
     for frame_idx, points in frame_keypoints.items():
         if frame_idx >= len(features):
             continue
-
-        # Forepaw span
         if "left_forepaw" in points and "right_forepaw" in points:
             lf = points["left_forepaw"]
             rf = points["right_forepaw"]
             features[frame_idx, 16] = np.hypot(lf[0] - rf[0], lf[1] - rf[1])
-
-        # Hindpaw span
         if "left_hindpaw" in points and "right_hindpaw" in points:
             lh = points["left_hindpaw"]
             rh = points["right_hindpaw"]
             features[frame_idx, 17] = np.hypot(lh[0] - rh[0], lh[1] - rh[1])
-
-        # Ear span
         if "left_ear" in points and "right_ear" in points:
             le = points["left_ear"]
             re = points["right_ear"]
             features[frame_idx, 18] = np.hypot(le[0] - re[0], le[1] - re[1])
-
-        # Nose-tail angle
         if "nose" in points and "tail_base" in points:
             nose = points["nose"]
             tail = points["tail_base"]

@@ -6,7 +6,9 @@ condition-specific anomaly detection, and threshold adjustments.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import numpy as np
 
 
 @dataclass
@@ -25,6 +27,10 @@ class ConditionProfile:
     flag_behaviors: list[str]
     # Description for reports
     description: str
+    # Multiplicative emission priors used by the adaptive HMM
+    class_priors: dict[str, float] = field(default_factory=dict)
+    # Extra self-transition probability for sticky states
+    stay_boost: dict[str, float] = field(default_factory=dict)
 
 
 CONDITION_PROFILES: dict[str, ConditionProfile] = {
@@ -39,6 +45,7 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.02, 0.10),
         flag_behaviors=["stereotypy_candidate"],
         description="Control session. Behavior serves as reference for drug comparisons.",
+        class_priors={"exploration": 1.15, "stereotypy_candidate": 0.7},
     ),
     "saline": ConditionProfile(
         name="Saline Control",
@@ -51,6 +58,7 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.02, 0.10),
         flag_behaviors=["stereotypy_candidate"],
         description="Saline vehicle control. Expected to match baseline.",
+        class_priors={"exploration": 1.15, "stereotypy_candidate": 0.7},
     ),
     "meth": ConditionProfile(
         name="Methamphetamine",
@@ -63,6 +71,15 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.0, 0.05),
         flag_behaviors=["stereotypy_candidate", "locomotor_burst"],
         description="Methamphetamine increases locomotor activity and stereotypy. Reduced resting and grooming expected.",
+        class_priors={
+            "locomotor_burst": 1.8,
+            "stereotypy_candidate": 2.4,
+            "turning_pattern": 1.4,
+            "resting": 0.45,
+            "grooming_candidate": 0.55,
+            "freezing_candidate": 0.6,
+        },
+        stay_boost={"stereotypy_candidate": 0.04, "locomotor_burst": 0.03},
     ),
     "methamphetamine": ConditionProfile(
         name="Methamphetamine",
@@ -75,6 +92,15 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.0, 0.05),
         flag_behaviors=["stereotypy_candidate", "locomotor_burst"],
         description="Methamphetamine increases locomotor activity and stereotypy. Reduced resting and grooming expected.",
+        class_priors={
+            "locomotor_burst": 1.8,
+            "stereotypy_candidate": 2.4,
+            "turning_pattern": 1.4,
+            "resting": 0.45,
+            "grooming_candidate": 0.55,
+            "freezing_candidate": 0.6,
+        },
+        stay_boost={"stereotypy_candidate": 0.04, "locomotor_burst": 0.03},
     ),
     "amphetamine": ConditionProfile(
         name="Amphetamine",
@@ -87,6 +113,13 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.0, 0.08),
         flag_behaviors=["stereotypy_candidate", "locomotor_burst"],
         description="Amphetamine produces dose-dependent locomotor activation and stereotypy.",
+        class_priors={
+            "locomotor_burst": 1.6,
+            "stereotypy_candidate": 1.9,
+            "exploration": 1.15,
+            "resting": 0.6,
+        },
+        stay_boost={"stereotypy_candidate": 0.03, "locomotor_burst": 0.02},
     ),
     "cocaine": ConditionProfile(
         name="Cocaine",
@@ -99,6 +132,13 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.0, 0.08),
         flag_behaviors=["stereotypy_candidate", "locomotor_burst"],
         description="Cocaine produces acute locomotor activation. Watch for rapid state transitions.",
+        class_priors={
+            "locomotor_burst": 1.7,
+            "stereotypy_candidate": 1.7,
+            "exploration": 1.1,
+            "resting": 0.55,
+        },
+        stay_boost={"locomotor_burst": 0.02},
     ),
     "alcohol": ConditionProfile(
         name="Alcohol",
@@ -111,6 +151,15 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.05, 0.20),
         flag_behaviors=["freezing_candidate", "hesitation", "resting"],
         description="Alcohol reduces exploration and may increase hesitation, freezing, and resting.",
+        class_priors={
+            "freezing_candidate": 1.8,
+            "hesitation": 1.7,
+            "resting": 1.9,
+            "locomotor_burst": 0.5,
+            "exploration": 0.65,
+            "stereotypy_candidate": 0.6,
+        },
+        stay_boost={"resting": 0.04, "freezing_candidate": 0.03, "hesitation": 0.02},
     ),
     "ethanol": ConditionProfile(
         name="Ethanol",
@@ -123,6 +172,15 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.05, 0.20),
         flag_behaviors=["freezing_candidate", "hesitation", "resting"],
         description="Ethanol reduces exploration and may increase hesitation, freezing, and resting.",
+        class_priors={
+            "freezing_candidate": 1.8,
+            "hesitation": 1.7,
+            "resting": 1.9,
+            "locomotor_burst": 0.5,
+            "exploration": 0.65,
+            "stereotypy_candidate": 0.6,
+        },
+        stay_boost={"resting": 0.04, "freezing_candidate": 0.03, "hesitation": 0.02},
     ),
     "morphine": ConditionProfile(
         name="Morphine",
@@ -135,6 +193,13 @@ CONDITION_PROFILES: dict[str, ConditionProfile] = {
         expected_hesitation=(0.02, 0.12),
         flag_behaviors=["stereotypy_candidate", "freezing_candidate"],
         description="Morphine can produce both locomotor activation and catalepsy depending on dose.",
+        class_priors={
+            "stereotypy_candidate": 1.4,
+            "freezing_candidate": 1.5,
+            "resting": 1.3,
+            "grooming_candidate": 0.6,
+        },
+        stay_boost={"freezing_candidate": 0.03, "resting": 0.02},
     ),
 }
 
@@ -244,3 +309,24 @@ def generate_condition_report(
         "anomaly_count": len(anomalies),
         "severe_anomaly_count": len([a for a in anomalies if a["severity"] == "high"]),
     }
+
+
+def class_log_bias(condition: str | None) -> np.ndarray:
+    """Log-space emission bias for the adaptive HMM, aligned to BEHAVIOR_LABELS."""
+    from .temporal_classifier import BEHAVIOR_LABELS, NUM_CLASSES
+
+    bias = np.zeros(NUM_CLASSES, dtype=np.float64)
+    profile = get_condition_profile(condition)
+    if profile is None or not profile.class_priors:
+        return bias
+    for label, prior in profile.class_priors.items():
+        if label in BEHAVIOR_LABELS and prior > 0:
+            bias[BEHAVIOR_LABELS.index(label)] = float(np.log(prior))
+    return bias
+
+
+def condition_stay_boost(condition: str | None) -> dict[str, float]:
+    profile = get_condition_profile(condition)
+    if profile is None:
+        return {}
+    return dict(profile.stay_boost)
