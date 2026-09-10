@@ -125,6 +125,18 @@ def test_upload_video_analysis_endpoint(tmp_path):
     assert isinstance(payload["bouts"], list)
     assert any("falling back to heuristic classification" in note.lower() for note in payload["notes"])
 
+    from app.config import settings
+    from app.temporal_classifier import FEATURE_NAMES
+
+    training_csv = settings.ANNOTATED_OUTPUTS_DIR / payload["analysis_id"] / "training_frames.csv"
+    assert training_csv.exists()
+    import pandas as pd
+
+    frames = pd.read_csv(training_csv)
+    assert set(FEATURE_NAMES).issubset(set(frames.columns))
+    assert "label" in frames.columns
+    assert len(frames) == payload["frame_count"]
+
 
 def test_pose_analysis_supports_richer_rat_body_schema():
     frames = 60

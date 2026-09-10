@@ -100,10 +100,94 @@ def main() -> None:
         "doctor",
         help="Check whether the local environment has the assets required for DLC and trained classifiers.",
     )
+
+    export_parser = subparsers.add_parser(
+        "export-dataset",
+        help="Merge per-session training_frames.csv files into one labeled dataset.",
+    )
+    export_parser.add_argument(
+        "--output",
+        default=str(Path("data/labeled/dataset.csv")),
+        help="Output CSV path (relative to backend/ if not absolute).",
+    )
+    export_parser.add_argument("--sessions-dir", default=None, help="Override annotated_sessions directory.")
+
+    review_parser = subparsers.add_parser(
+        "export-review",
+        help="Export uncertain / hard bouts for human correction.",
+    )
+    review_parser.add_argument("--output", default=str(Path("data/labeled/review.csv")))
+    review_parser.add_argument("--sessions-dir", default=None)
+    review_parser.add_argument("--min-confidence", type=float, default=0.6)
+
+    apply_parser = subparsers.add_parser(
+        "apply-review",
+        help="Apply corrected_label values from a review CSV onto session training frames.",
+    )
+    apply_parser.add_argument("review_csv")
+    apply_parser.add_argument("--sessions-dir", default=None)
+
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Train the PyTorch LSTM/Transformer classifier from a labeled CSV.",
+    )
+    train_parser.add_argument("--csv", default=str(Path("data/labeled/dataset.csv")))
+    train_parser.add_argument("--model-type", choices=["lstm", "transformer"], default="lstm")
+    train_parser.add_argument("--epochs", type=int, default=40)
+    train_parser.add_argument("--batch-size", type=int, default=16)
+    train_parser.add_argument("--output-dir", default=None)
+
     args = parser.parse_args()
 
     if args.command == "doctor":
         raise SystemExit(doctor())
+
+    if args.command == "export-dataset":
+        from .training import export_dataset
+
+        result = export_dataset(_resolve_backend_path(args.output), sessions_dir=args.sessions_dir)
+        print(json.dumps(result, indent=2))
+        return
+
+    if args.command == "export-review":
+        from .training import export_review_queue
+
+        result = export_review_queue(
+            _resolve_backend_path(args.output),
+            sessions_dir=args.sessions_dir,
+            min_confidence=args.min_confidence,
+        )
+        print(json.dumps(result, indent=2))
+        print("Edit corrected_label, then: python -m app.cli apply-review data/labeled/review.csv")
+        return
+
+    if args.command == "apply-review":
+        from .training import apply_review, export_dataset
+
+        result = apply_review(args.review_csv, sessions_dir=args.sessions_dir)
+        dataset = export_dataset(_resolve_backend_path("data/labeled/dataset.csv"), sessions_dir=args.sessions_dir)
+        print(json.dumps({"review": result, "dataset": dataset}, indent=2))
+        return
+
+    if args.command == "train":
+        from .training import LABELED_DATA_DIR, train_from_csv
+
+        csv_path = _resolve_backend_path(args.csv)
+        output_dir = args.output_dir or str(LABELED_DATA_DIR.parent / "models" / "behavior_classifier")
+        result = train_from_csv(
+            str(csv_path),
+            model_type=args.model_type,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            output_dir=output_dir,
+        )
+        model_path = result["model_path"]
+        print(json.dumps({"model_path": model_path, "metadata": result["metadata"]}, indent=2))
+        print("\nPoint the app at this checkpoint (backend/.env):")
+        print("CLASSIFIER_TYPE=pytorch_temporal")
+        print(f"CLASSIFIER_MODEL_PATH={model_path}")
+        print("CLASSIFIER_MODEL_TYPE=" + args.model_type)
+        return
 
     summary = analyze_dlc_csv(args.dlc_csv_path, fps=args.fps)
     payload = json.dumps(summary, indent=2)
@@ -114,6 +198,13 @@ def main() -> None:
         output_path.write_text(payload + "\n", encoding="utf-8")
     else:
         print(payload)
+
+
+def _resolve_backend_path(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (settings.BASE_DIR / candidate).resolve()
 
 
 if __name__ == "__main__":
