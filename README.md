@@ -39,6 +39,42 @@ python -m uvicorn app.main:app --reload
 Open:
 [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
+## Train the temporal classifier (LSTM)
+
+The default app uses an adaptive HMM. To train a real PyTorch model, you label **bouts**, not every frame.
+
+1. **Analyze videos** in the UI (Adaptive HMM). Each run writes  
+   `backend/data/processed/annotated_sessions/<id>/training_frames.csv` (22 features + labels).
+2. **Export a review list** of hard/uncertain bouts (grooming, freeze, stereotypy, low confidence):
+
+```bash
+cd backend
+python -m app.cli export-review
+```
+
+3. **Correct only the wrong rows** in `data/labeled/review.csv`. Fill `corrected_label` with one of:  
+   `exploration`, `locomotor_burst`, `freezing_candidate`, `grooming_candidate`, `hesitation`, `stereotypy_candidate`, `turning_pattern`, `resting`, `monitoring`.  
+   Leave it blank to keep the auto label. Aim for 20–40 minutes of hard bouts across baseline / meth / alcohol.
+4. **Apply corrections and merge the dataset:**
+
+```bash
+python -m app.cli apply-review data/labeled/review.csv
+python -m app.cli export-dataset
+python -m app.cli train --csv data/labeled/dataset.csv --epochs 40 --model-type lstm
+```
+
+5. **Point the app at the checkpoint** in `backend/.env`:
+
+```bash
+CLASSIFIER_TYPE=pytorch_temporal
+CLASSIFIER_MODEL_PATH=data/models/behavior_classifier/behavior_lstm_best.pt
+CLASSIFIER_MODEL_TYPE=lstm
+```
+
+Restart uvicorn. In the UI choose **PyTorch Temporal**. If the checkpoint is missing, it falls back to the HMM.
+
+Do not skip step 3. Training only on HMM labels just copies the HMM.
+
 Copy the backend environment template before running a non-heuristic pipeline:
 
 ```bash

@@ -20,6 +20,7 @@ from .temporal_classifier import (
     extract_features_from_motion,
     enrich_with_pose,
 )
+from .training import write_training_frames_csv
 from .simba_classifier import get_simba_classifier
 from .condition_profiles import (
     condition_adjusted_review_priority,
@@ -517,6 +518,22 @@ def _run_behavior_analysis(
     if pose_runtime_available:
         pose_enrichment, pose_enrichment_error = _maybe_pose_enrichment(input_path, fps)
 
+    feature_matrix = extract_features_from_motion(
+        speeds=recent_speeds,
+        motion_scores=motion_scores,
+        direction_deltas=direction_deltas,
+        spatial_spans=spatial_spans,
+        bbox_area_ratios=bbox_area_ratios,
+        pace_confined_scores=pace_confined_scores,
+        centroids_x=centroids_x,
+        centroids_y=centroids_y,
+        frame_width=width,
+        frame_height=height,
+        fps=fps,
+        window_frames=window_frames,
+    )
+    feature_matrix = enrich_with_pose(feature_matrix, pose_enrichment, fps)
+
     # --- Phase 3: Classify behavior (NN, SimBA, or adaptive HMM) ---
     def _append_states(labels: list[str], confidences: list[float]) -> None:
         nonlocal last_stream_label
@@ -572,21 +589,6 @@ def _run_behavior_analysis(
             )
 
     if classifier_mode == "pytorch_temporal":
-        feature_matrix = extract_features_from_motion(
-            speeds=recent_speeds,
-            motion_scores=motion_scores,
-            direction_deltas=direction_deltas,
-            spatial_spans=spatial_spans,
-            bbox_area_ratios=bbox_area_ratios,
-            pace_confined_scores=pace_confined_scores,
-            centroids_x=centroids_x,
-            centroids_y=centroids_y,
-            frame_width=width,
-            frame_height=height,
-            fps=fps,
-            window_frames=window_frames,
-        )
-        feature_matrix = enrich_with_pose(feature_matrix, pose_enrichment, fps)
         classifications = nn_classifier.predict(feature_matrix)
         _append_states(
             [cls.label for cls in classifications],
@@ -595,21 +597,6 @@ def _run_behavior_analysis(
 
     if classifier_mode in {"heuristic", "adaptive_hmm"}:
         classifier_mode = "adaptive_hmm"
-        feature_matrix = extract_features_from_motion(
-            speeds=recent_speeds,
-            motion_scores=motion_scores,
-            direction_deltas=direction_deltas,
-            spatial_spans=spatial_spans,
-            bbox_area_ratios=bbox_area_ratios,
-            pace_confined_scores=pace_confined_scores,
-            centroids_x=centroids_x,
-            centroids_y=centroids_y,
-            frame_width=width,
-            frame_height=height,
-            fps=fps,
-            window_frames=window_frames,
-        )
-        feature_matrix = enrich_with_pose(feature_matrix, pose_enrichment, fps)
         sequence = classify_feature_sequence(
             feature_matrix,
             frame_width=width,
@@ -780,6 +767,15 @@ def _run_behavior_analysis(
 
     timeline_path = artifact_dir / "timeline.json"
     timeline_path.write_text(json.dumps(timeline, indent=2) + "\n", encoding="utf-8")
+    write_training_frames_csv(
+        artifact_dir / "training_frames.csv",
+        feature_matrix=feature_matrix,
+        frame_states=frame_states,
+        analysis_id=analysis_id,
+        condition=condition,
+        fps=fps,
+        label_source=classifier_mode,
+    )
 
     return {
         "analysis_id": analysis_id,

@@ -76,6 +76,21 @@ NUM_FEATURES = len(FEATURE_NAMES)
 SEQUENCE_LENGTH = 64
 
 
+def _load_feature_scaler(model_path: str | None):
+    if not model_path:
+        return None
+    scaler_path = Path(model_path).expanduser().resolve().parent / "feature_scaler.pkl"
+    if not scaler_path.exists():
+        return None
+    try:
+        import pickle
+
+        with scaler_path.open("rb") as handle:
+            return pickle.load(handle)
+    except Exception:
+        return None
+
+
 if TORCH_AVAILABLE:
 
     class BehaviorLSTM(nn.Module):
@@ -324,29 +339,66 @@ class TemporalBehaviorClassifier:
 
         self.model.to(self.device)
         self.model.eval()
+        self.scaler = _load_feature_scaler(model_path)
+
+    def _transform(self, features: np.ndarray) -> np.ndarray:
+        feats = np.asarray(features, dtype=np.float32)
+        if self.scaler is None:
+            return feats
+        if hasattr(self.scaler, "transform"):
+            return np.asarray(self.scaler.transform(feats), dtype=np.float32)
+        mean = np.asarray(self.scaler.get("mean"))
+        std = np.asarray(self.scaler.get("std"))
+        std = np.where(std < 1e-8, 1.0, std)
+        return ((feats - mean) / std).astype(np.float32)
 
     def predict(self, features: np.ndarray) -> list[FrameClassification]:
         """
-        Classify behavior for each frame.
+        Classify behavior for each frame using overlapping windows.
 
         Args:
             features: (num_frames, NUM_FEATURES) feature matrix
         Returns:
             List of FrameClassification per frame
         """
+        feats = self._transform(features)
+        n = len(feats)
+        if n == 0:
+            return []
+
+        seq = SEQUENCE_LENGTH
+        stride = max(1, seq // 2)
+        logit_sum = np.zeros((n, NUM_CLASSES), dtype=np.float64)
+        counts = np.zeros((n, 1), dtype=np.float64)
+        starts = list(range(0, n, stride))
+        last_start = max(0, n - seq)
+        if starts[-1] != last_start:
+            starts.append(last_start)
+
         with torch.no_grad():
-            x = torch.from_numpy(features).float().unsqueeze(0).to(self.device)
-            logits = self.model(x)  # (1, seq_len, num_classes)
-            probs = torch.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
-            logits_np = logits.squeeze(0).cpu().numpy()
+            for start in starts:
+                end = min(start + seq, n)
+                window = feats[start:end]
+                if len(window) < seq:
+                    window = np.pad(window, ((0, seq - len(window)), (0, 0)), mode="edge")
+                x = torch.from_numpy(window).float().unsqueeze(0).to(self.device)
+                logits = self.model(x).squeeze(0).cpu().numpy()
+                take = end - start
+                logit_sum[start:end] += logits[:take]
+                counts[start:end] += 1.0
+
+        mean_logits = logit_sum / np.maximum(counts, 1.0)
+        shifted = mean_logits - mean_logits.max(axis=1, keepdims=True)
+        exp = np.exp(shifted)
+        probs = exp / np.maximum(exp.sum(axis=1, keepdims=True), 1e-8)
 
         results = []
-        for i in range(len(features)):
+        for i in range(n):
             pred_idx = int(np.argmax(probs[i]))
             results.append(FrameClassification(
                 label=IDX_TO_LABEL[pred_idx],
                 confidence=float(probs[i][pred_idx]),
-                logits=logits_np[i].tolist(),
+                logits=mean_logits[i].tolist(),
             ))
         return results
 
@@ -405,11 +457,16 @@ def get_classifier(classifier_type: str | None = None) -> TemporalBehaviorClassi
         return None
 
     model_path = getattr(settings, "CLASSIFIER_MODEL_PATH", None)
-    if not model_path or not Path(model_path).exists():
+    if not model_path:
+        return None
+    path = Path(model_path).expanduser()
+    if not path.is_absolute():
+        path = Path(settings.BASE_DIR) / path
+    if not path.exists():
         return None
     model_type = getattr(settings, "CLASSIFIER_MODEL_TYPE", "lstm")
     return TemporalBehaviorClassifier(
-        model_path=model_path,
+        model_path=str(path),
         model_type=model_type,
     )
 
